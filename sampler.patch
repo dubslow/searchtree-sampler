@@ -1,0 +1,87 @@
+diff --git a/src/search.cpp b/src/search.cpp
+index 33131d93..f7abf178 100644
+--- a/src/search.cpp
++++ b/src/search.cpp
+@@ -25,7 +25,11 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstdint>
++#include <cstdio>
+ #include <cstdlib>
++#include <functional>
++#include <thread>
++#include <unistd.h>
+ #include <initializer_list>
+ #include <iostream>
+ #include <list>
+@@ -1932,9 +1936,68 @@ TimePoint Search::Worker::elapsed() const {
+ 
+ // Evaluate the current position of the game tree, from the point of view of
+ // the side to move.
++namespace {
++// Research instrumentation (TREE_SAMPLE_DIR, TREE_SAMPLE_P): write a random sample of the positions whose static
++// evaluation the search computes afresh, keeping only quiet ones (the side to move has no capture or queen
++// promotion that wins material by SEE), with one legal non-capturing move. Never touches the search state.
++struct TreeSampler {
++    std::FILE* f         = nullptr;
++    uint64_t   rng       = 0;
++    uint64_t   threshold = 0;
++    bool       init      = false;
++    void       setup() {
++        init = true;
++        const char* dir = std::getenv("TREE_SAMPLE_DIR");
++        const char* pr  = std::getenv("TREE_SAMPLE_P");
++        if (!dir || !pr)
++            return;
++        const uint64_t id = uint64_t(std::hash<std::thread::id>{}(std::this_thread::get_id()));
++        rng               = id ^ (uint64_t(std::chrono::steady_clock::now().time_since_epoch().count()) * 0x9E3779B97F4A7C15ULL) ^ (uint64_t(getpid()) << 32);
++        threshold         = uint64_t(std::atof(pr) * 18446744073709551615.0);
++        f = std::fopen((std::string(dir) + "/" + std::to_string(getpid()) + "_" + std::to_string(id % 1000003) + ".txt").c_str(), "a");
++    }
++    uint64_t next() {
++        rng += 0x9E3779B97F4A7C15ULL;
++        uint64_t z = rng;
++        z          = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
++        z          = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
++        return z ^ (z >> 31);
++    }
++    ~TreeSampler() {
++        if (f)
++            std::fclose(f);
++    }
++};
++thread_local TreeSampler treeSampler;
++
++void tree_sample(const Position& pos, Value v) {
++    TreeSampler& T = treeSampler;
++    if (!T.init)
++        T.setup();
++    if (!T.f || T.next() >= T.threshold || pos.checkers())
++        return;
++    for (const auto& m : MoveList<CAPTURES>(pos))
++        if (pos.legal(m) && pos.see_ge(m, 1))
++            return;
++    Move quiet = Move::none();
++    for (const auto& m : MoveList<QUIETS>(pos))
++        if (pos.legal(m) && m.type_of() == NORMAL)
++        {
++            quiet = m;
++            break;
++        }
++    if (!quiet)
++        return;
++    std::fprintf(T.f, "%s\t%s\t%d\t%d\n", pos.fen().c_str(), UCIEngine::move(quiet, false).c_str(), int(v),
++                 int(pos.captured_piece() != NO_PIECE));
++}
++}
++
+ Value Search::Worker::evaluate(const Position& pos) {
+-    return Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
+-                          optimism[pos.side_to_move()]);
++    const Value v = Eval::evaluate(network[numaAccessToken], pos, accumulatorStack, refreshTable,
++                                   optimism[pos.side_to_move()]);
++    tree_sample(pos, v);
++    return v;
+ }
+ 
+ namespace {
