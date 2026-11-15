@@ -59,10 +59,17 @@ takes 34 bytes.
 ## After sampling
 
 - **Labels.** The eval stored by the sampler is a placeholder. The dataset
-  replaces it with the value Leela's BT4 net gives the position on its own,
-  without game history. The relabeler builds on
-  [this lc0 branch](https://github.com/xu-shawn/lc0/tree/relabel_dual_stream_test)
-  and is not part of this repo.
+  replaces it with the value Leela's
+  [BT4-tf13tune](https://huggingface.co/xushawn/BT4-tf13tune) net gives the
+  position on its own, without game history. The relabeler is
+  [this lc0 branch](https://github.com/xu-shawn/lc0/tree/searchtree-relabel):
+
+  ```bash
+  LC0_RELABEL_HISTORY=fen LC0_RELABEL_QF32=out.q.f32 \
+    lc0 BT4-tf13tune.pb.gz in.binpack out.binpack 1024
+  ```
+
+  `out.q.f32` holds the net's raw value of every entry as a float32.
 - **Training.** Entries carry ply 9999 as a marker.
   [This trainer commit](https://github.com/xu-shawn/nnue-pytorch/commit/289991ed8fe7a926533c153dd7bbeef9ac737161)
   adds `--tree-sample-accept`: marked entries skip the position filters, are
